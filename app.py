@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify # importando as classes Flask, request e jsonify da biblioteca flask
 from flask_sqlalchemy import SQLAlchemy # importando a classe SQLAlchemy da biblioteca flask_sqlalchemy
 from flask_cors import CORS
-from flask_login import UserMixin, login_user, LoginManager, login_required, logout_user
+from flask_login import UserMixin, login_user, LoginManager, login_required, logout_user, current_user
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'XPTO_123' # chave para habilitar o LoginManager
@@ -13,12 +13,13 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 CORS(app) # agora conseguimos acessar o swagger de qualquer lugar
 
-# modelagem das tabelas User e Product
+# modelagem das tabelas User, Product e CartItem
 # usuario (id, username, password)
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key = True)
     username = db.Column(db.String(80), nullable = False, unique = True) # esse campo pode ter até 30 caracteres, não pode ser nulo e deve ser único
     password = db.Column(db.String(80), nullable = False)
+    cart = db.relationship('CartItem', backref = 'user', lazy = True)
 '''
 flask shell
 user = User(username="admin", password="123")
@@ -33,6 +34,20 @@ class Product(db.Model):
     name = db.Column(db.String(120), nullable = False) # esse campo pode ter até 120 caracteres e não pode ser nulo
     price = db.Column(db.Float, nullable = False)
     description = db.Column(db.Text, nullable = True) # esse campo não tem limitação no tamanho do texto e é opcional
+
+class CartItem(db.Model):
+    id = db.Column(db.Integer, primary_key = True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable = False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable = False)
+'''
+flask shell
+db.drop_all()
+db.create_all()
+user = User(username="admin", password="123")
+db.session.add(user)
+db.session.commit()
+exit()
+'''
 
 # autenticação
 @login_manager.user_loader
@@ -127,11 +142,67 @@ def delete_product(product_id):
         return jsonify({'message': 'Product deleted successfully!'}), 200
     return jsonify({'message': 'Product not found'}), 404 # Se não existir, retorna 404 not found
 
+# checkout
+@app.route('/api/cart/add/<int:product_id>', methods = ['POST'])
+@login_required
+def add_to_cart(product_id):
+    user = User.query.get(int(current_user.id))
+    product = Product.query.get(product_id)
+
+    if user and product:
+        cart_item = CartItem(user_id = user.id, product_id = product.id)
+        db.session.add(cart_item)
+        db.session.commit()
+        return jsonify({'message': 'Item added to the cart successfully'})
+    return jsonify({'message': 'Failed to add item to the cart'}), 400
+
+@app.route('/api/cart/remove/<int:product_id>', methods = ['DELETE'])
+@login_required
+def remove_from_cart(product_id):
+    cart_item = CartItem.query.filter_by(user_id = current_user.id, product_id = product_id).first()
+
+    if cart_item:
+        db.session.delete(cart_item)
+        db.session.commit()
+        return jsonify({'message': 'Item removed from the cart successfully'})
+    return jsonify({'message': 'Failed to remove item from the cart'}), 400
+
+@app.route('/api/cart', methods = ['GET'])
+@login_required
+def view_cart():
+    user = User.query.get(int(current_user.id))
+    cart_items = user.cart
+    cart_content = []
+
+    for cart_item in cart_items:
+        product = Product.query.get(cart_item.product_id)
+        cart_content.append({
+            "id": cart_item.id,
+            "user_id": cart_item.user_id,
+            "product_id": cart_item.product_id,
+            "product_name": product.name,
+            "product_price": product.price
+        })
+    return jsonify(cart_content)
+
+@app.route('/api/cart/checkout', methods = ['POST'])
+@login_required
+def checkout():
+    user = User.query.get(int(current_user.id))
+    cart_items = user.cart
+
+    for cart_item in cart_items:
+        db.session.delete(cart_item)
+    db.session.commit()
+    return jsonify({'message': 'Checkout successful. Cart has been cleared.'})
+
+'''
 # definir uma rota raiz (página inicial) e a função que será executada ao requisitar
 @app.route('/')
 def hello_world():
     return 'Hello, World!'
     # print('Hello, World!')
+'''
 
 if __name__ == '__main__':
     app.run(debug = True)
